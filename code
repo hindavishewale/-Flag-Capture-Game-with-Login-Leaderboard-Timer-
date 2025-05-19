@@ -1,0 +1,578 @@
+import pygame
+import sys
+import random
+import time
+import hashlib
+import json
+import os
+
+# Initialize Pygame
+pygame.init()
+
+# Game dimensions
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 700
+PLAY_AREA = 600
+UI_HEIGHT = 100
+
+# Colors
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+BROWN = (139, 69, 19)
+WHITE = (255, 255, 255)
+GRAY = (100, 100, 100)
+LIGHT_GRAY = (200, 200, 200)
+BLUE = (0, 100, 255)
+GREEN = (0, 180, 0)
+YELLOW = (255, 255, 0)
+FLAG_COLORS = [
+    (255, 255, 0),   # Yellow
+    (0, 255, 0),     # Green
+    (0, 0, 255),     # Blue
+    (255, 0, 255),   # Magenta
+    (0, 255, 255),   # Cyan
+    (255, 165, 0)    # Orange
+]
+
+# Create the game window
+screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+pygame.display.set_caption("Flag Capture Game")
+
+# Fonts
+font = pygame.font.SysFont(None, 36)
+small_font = pygame.font.SysFont(None, 24)
+large_font = pygame.font.SysFont(None, 72)
+
+# User data file
+USER_DATA_FILE = "users.json"
+
+# Load user data
+def load_users():
+    if os.path.exists(USER_DATA_FILE):
+        try:
+            with open(USER_DATA_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+# Save user data
+def save_users(users):
+    with open(USER_DATA_FILE, 'w') as f:
+        json.dump(users, f)
+
+# Hash password
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Authentication state
+users = load_users()
+current_user = None
+auth_screen = True
+login_active = True
+username_input = ""
+password_input = ""
+input_active = "username"
+error_message = ""
+
+# Game state
+game_state = "auth"  # auth, playing, game_over, dashboard, leaderboard
+
+# Butterfly net properties (replacing circle)
+net_width = 40
+net_height = 40
+net_x = WINDOW_WIDTH // 2
+net_y = WINDOW_HEIGHT // 2
+net_speed = 5
+
+# Flag properties
+flag_width = 10
+flag_height = 20
+pole_height = 40
+num_flags = 6
+flags = []
+
+# Score and timer
+score = 0
+game_time = 60  # 60 seconds
+start_time = 0
+
+# Input box properties
+input_box_width = 300
+input_box_height = 40
+input_box_x = (WINDOW_WIDTH - input_box_width) // 2
+username_box_y = WINDOW_HEIGHT // 2 - 60
+password_box_y = WINDOW_HEIGHT // 2
+
+# Button properties
+button_width = 150
+button_height = 40
+login_button_x = WINDOW_WIDTH // 2 - button_width - 10
+signup_button_x = WINDOW_WIDTH // 2 + 10
+button_y = WINDOW_HEIGHT // 2 + 60
+
+# Dashboard button properties
+dashboard_button_width = 180
+dashboard_button_height = 50
+play_button_x = WINDOW_WIDTH // 2 - dashboard_button_width - 20
+leaderboard_button_x = WINDOW_WIDTH // 2 + 20
+dashboard_button_y = WINDOW_HEIGHT // 2
+
+# Generate random flag positions
+def generate_flags():
+    new_flags = []
+    for i in range(num_flags):
+        x = random.randint(50, WINDOW_WIDTH - 50)
+        y = random.randint(50, WINDOW_HEIGHT - UI_HEIGHT - 50)
+        color = FLAG_COLORS[i]
+        # Add random movement
+        dx = random.uniform(-0.5, 0.5)
+        dy = random.uniform(-0.5, 0.5)
+        new_flags.append({
+            'x': x,
+            'y': y,
+            'color': color,
+            'captured': False,
+            'dx': dx,
+            'dy': dy
+        })
+    return new_flags
+
+# Reset game
+def reset_game():
+    global flags, score, game_time, start_time, game_state
+    flags = generate_flags()
+    score = 0
+    game_time = 60
+    start_time = time.time()
+    game_state = "playing"
+
+# Update high score
+def update_high_score():
+    global users, current_user, score
+    if current_user and current_user in users:
+        if isinstance(users[current_user], str):  # Old format with just password
+            # Convert to new format with password and high score
+            password = users[current_user]
+            users[current_user] = {
+                "password": password,
+                "high_score": score
+            }
+        elif "high_score" not in users[current_user]:
+            users[current_user]["high_score"] = score
+        elif score > users[current_user]["high_score"]:
+            users[current_user]["high_score"] = score
+        save_users(users)
+
+# Draw flag
+def draw_flag(x, y, color):
+    # Draw pole
+    pygame.draw.rect(screen, BROWN, (x, y - pole_height, 3, pole_height))
+    # Draw triangular flag
+    pygame.draw.polygon(screen, color, [(x, y - pole_height), (x + flag_width, y - pole_height + flag_height // 2), (x, y - pole_height + flag_height)])
+
+# Draw butterfly net
+def draw_net(x, y):
+    # Draw handle
+    pygame.draw.rect(screen, BROWN, (x, y, 5, 30))
+    # Draw net (semicircle)
+    pygame.draw.arc(screen, WHITE, (x - 15, y - 20, 30, 30), 0, 3.14, 2)
+    # Draw net lines
+    for i in range(-15, 16, 5):
+        pygame.draw.line(screen, WHITE, (x + i, y - 20), (x, y), 1)
+
+# Check flag collision
+def check_flag_collision():
+    global score, flags
+    all_captured = True
+    
+    for flag in flags:
+        if not flag['captured']:
+            all_captured = False
+            # Check if net overlaps with flag pole area
+            flag_x = flag['x']
+            flag_y = flag['y'] - pole_height
+            # Simple distance check between net and flag
+            distance = ((net_x - flag_x) ** 2 + (net_y - flag_y) ** 2) ** 0.5
+            if distance < 30:  # Buffer for net size
+                flag['captured'] = True
+                score += 50
+    
+    # If all flags are captured, generate new ones
+    if all_captured:
+        flags = generate_flags()
+
+# Draw authentication screen
+def draw_auth_screen():
+    global input_active, username_input, password_input, error_message, login_active
+    
+    # Draw title
+    title_text = large_font.render("Flag Capture Game", True, WHITE)
+    screen.blit(title_text, ((WINDOW_WIDTH - title_text.get_width()) // 2, 100))
+    
+    # Draw input boxes
+    username_box_color = BLUE if input_active == "username" else GRAY
+    password_box_color = BLUE if input_active == "password" else GRAY
+    
+    pygame.draw.rect(screen, username_box_color, (input_box_x, username_box_y, input_box_width, input_box_height), 2)
+    pygame.draw.rect(screen, password_box_color, (input_box_x, password_box_y, input_box_width, input_box_height), 2)
+    
+    # Draw input labels
+    username_label = small_font.render("Username:", True, WHITE)
+    password_label = small_font.render("Password:", True, WHITE)
+    screen.blit(username_label, (input_box_x, username_box_y - 25))
+    screen.blit(password_label, (input_box_x, password_box_y - 25))
+    
+    # Draw input text
+    username_surface = small_font.render(username_input, True, WHITE)
+    password_surface = small_font.render("*" * len(password_input), True, WHITE)
+    screen.blit(username_surface, (input_box_x + 10, username_box_y + 10))
+    screen.blit(password_surface, (input_box_x + 10, password_box_y + 10))
+    
+    # Draw buttons
+    login_color = BLUE if login_active else GRAY
+    signup_color = GRAY if login_active else BLUE
+    
+    pygame.draw.rect(screen, login_color, (login_button_x, button_y, button_width, button_height))
+    pygame.draw.rect(screen, signup_color, (signup_button_x, button_y, button_width, button_height))
+    
+    login_text = small_font.render("Login", True, WHITE)
+    signup_text = small_font.render("Sign Up", True, WHITE)
+    screen.blit(login_text, (login_button_x + (button_width - login_text.get_width()) // 2, button_y + 10))
+    screen.blit(signup_text, (signup_button_x + (button_width - signup_text.get_width()) // 2, button_y + 10))
+    
+    # Draw error message
+    if error_message:
+        error_surface = small_font.render(error_message, True, RED)
+        screen.blit(error_surface, ((WINDOW_WIDTH - error_surface.get_width()) // 2, button_y + 60))
+
+# Draw dashboard screen
+def draw_dashboard():
+    # Draw title
+    title_text = large_font.render("Dashboard", True, WHITE)
+    screen.blit(title_text, ((WINDOW_WIDTH - title_text.get_width()) // 2, 100))
+    
+    # Draw welcome message
+    welcome_text = font.render(f"Welcome, {current_user}!", True, WHITE)
+    screen.blit(welcome_text, ((WINDOW_WIDTH - welcome_text.get_width()) // 2, 180))
+    
+    # Draw high score if available
+    if current_user in users and isinstance(users[current_user], dict) and "high_score" in users[current_user]:
+        high_score_text = font.render(f"Your High Score: {users[current_user]['high_score']}", True, WHITE)
+        screen.blit(high_score_text, ((WINDOW_WIDTH - high_score_text.get_width()) // 2, 230))
+    
+    # Draw buttons
+    pygame.draw.rect(screen, GREEN, (play_button_x, dashboard_button_y, dashboard_button_width, dashboard_button_height))
+    pygame.draw.rect(screen, BLUE, (leaderboard_button_x, dashboard_button_y, dashboard_button_width, dashboard_button_height))
+    
+    play_text = font.render("Play Game", True, WHITE)
+    leaderboard_text = font.render("Leaderboard", True, WHITE)
+    screen.blit(play_text, (play_button_x + (dashboard_button_width - play_text.get_width()) // 2, dashboard_button_y + 10))
+    screen.blit(leaderboard_text, (leaderboard_button_x + (dashboard_button_width - leaderboard_text.get_width()) // 2, dashboard_button_y + 10))
+    
+    # Draw logout button
+    logout_button_width = 120
+    logout_button_height = 40
+    logout_button_x = (WINDOW_WIDTH - logout_button_width) // 2
+    logout_button_y = WINDOW_HEIGHT - 100
+    
+    pygame.draw.rect(screen, RED, (logout_button_x, logout_button_y, logout_button_width, logout_button_height))
+    logout_text = small_font.render("Logout", True, WHITE)
+    screen.blit(logout_text, (logout_button_x + (logout_button_width - logout_text.get_width()) // 2, logout_button_y + 10))
+
+# Draw leaderboard screen
+def draw_leaderboard():
+    # Draw title
+    title_text = large_font.render("Leaderboard", True, WHITE)
+    screen.blit(title_text, ((WINDOW_WIDTH - title_text.get_width()) // 2, 50))
+    
+    # Get sorted scores
+    scores = []
+    for username, data in users.items():
+        if isinstance(data, dict) and "high_score" in data:
+            scores.append((username, data["high_score"]))
+        elif isinstance(data, str):  # Old format without high score
+            scores.append((username, 0))
+    
+    # Sort by score (descending)
+    scores.sort(key=lambda x: x[1], reverse=True)
+    
+    # Draw scores
+    y_pos = 150
+    for i, (username, high_score) in enumerate(scores[:10]):  # Show top 10
+        rank_text = font.render(f"{i+1}.", True, WHITE)
+        name_text = font.render(username, True, WHITE)
+        score_text = font.render(str(high_score), True, WHITE)
+        
+        screen.blit(rank_text, (WINDOW_WIDTH // 4 - 50, y_pos))
+        screen.blit(name_text, (WINDOW_WIDTH // 2 - 100, y_pos))
+        screen.blit(score_text, (WINDOW_WIDTH * 3 // 4, y_pos))
+        
+        y_pos += 40
+    
+    # Draw back button
+    back_button_width = 120
+    back_button_height = 40
+    back_button_x = (WINDOW_WIDTH - back_button_width) // 2
+    back_button_y = WINDOW_HEIGHT - 100
+    
+    pygame.draw.rect(screen, BLUE, (back_button_x, back_button_y, back_button_width, back_button_height))
+    back_text = small_font.render("Back", True, WHITE)
+    screen.blit(back_text, (back_button_x + (back_button_width - back_text.get_width()) // 2, back_button_y + 10))
+
+# Draw game UI
+def draw_game_ui():
+    # Draw horizontal line
+    pygame.draw.line(screen, WHITE, (0, WINDOW_HEIGHT - UI_HEIGHT), (WINDOW_WIDTH, WINDOW_HEIGHT - UI_HEIGHT), 2)
+    
+    # Draw score
+    score_text = font.render(f"Score: {score}", True, WHITE)
+    screen.blit(score_text, (20, WINDOW_HEIGHT - UI_HEIGHT + 40))
+    
+    # Draw timer
+    remaining_time = max(0, game_time - (time.time() - start_time))
+    timer_text = font.render(f"Time: {int(remaining_time)}s", True, WHITE)
+    screen.blit(timer_text, (WINDOW_WIDTH - timer_text.get_width() - 20, WINDOW_HEIGHT - UI_HEIGHT + 40))
+    
+    # Draw username
+    if current_user:
+        user_text = small_font.render(f"Player: {current_user}", True, WHITE)
+        screen.blit(user_text, ((WINDOW_WIDTH - user_text.get_width()) // 2, WINDOW_HEIGHT - UI_HEIGHT + 20))
+
+# Draw game over screen
+def draw_game_over():
+    # Draw semi-transparent overlay
+    overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT - UI_HEIGHT))
+    overlay.set_alpha(150)
+    overlay.fill(BLACK)
+    screen.blit(overlay, (0, 0))
+    
+    # Draw game over text
+    game_over_text = large_font.render("GAME OVER", True, RED)
+    screen.blit(game_over_text, ((WINDOW_WIDTH - game_over_text.get_width()) // 2, (WINDOW_HEIGHT - UI_HEIGHT) // 2 - 50))
+    
+    # Draw final score
+    final_score_text = font.render(f"Final Score: {score}", True, WHITE)
+    screen.blit(final_score_text, ((WINDOW_WIDTH - final_score_text.get_width()) // 2, (WINDOW_HEIGHT - UI_HEIGHT) // 2 + 20))
+    
+    # Draw restart instruction
+    restart_text = font.render("Press 'R' to play again", True, WHITE)
+    screen.blit(restart_text, ((WINDOW_WIDTH - restart_text.get_width()) // 2, (WINDOW_HEIGHT - UI_HEIGHT) // 2 + 70))
+    
+    # Draw dashboard button
+    dashboard_button_width = 200
+    dashboard_button_height = 40
+    dashboard_button_x = (WINDOW_WIDTH - dashboard_button_width) // 2
+    dashboard_button_y = (WINDOW_HEIGHT - UI_HEIGHT) // 2 + 120
+    
+    pygame.draw.rect(screen, BLUE, (dashboard_button_x, dashboard_button_y, dashboard_button_width, dashboard_button_height))
+    dashboard_text = small_font.render("Return to Dashboard", True, WHITE)
+    screen.blit(dashboard_text, (dashboard_button_x + (dashboard_button_width - dashboard_text.get_width()) // 2, dashboard_button_y + 10))
+
+# Game loop
+clock = pygame.time.Clock()
+running = True
+
+while running:
+    # Handle events
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+            
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            if game_state == "auth":
+                # Check if username box clicked
+                if input_box_x <= event.pos[0] <= input_box_x + input_box_width and username_box_y <= event.pos[1] <= username_box_y + input_box_height:
+                    input_active = "username"
+                # Check if password box clicked
+                elif input_box_x <= event.pos[0] <= input_box_x + input_box_width and password_box_y <= event.pos[1] <= password_box_y + input_box_height:
+                    input_active = "password"
+                # Check if login button clicked
+                elif login_button_x <= event.pos[0] <= login_button_x + button_width and button_y <= event.pos[1] <= button_y + button_height:
+                    login_active = True
+                    if username_input and password_input:
+                        if login_active:
+                            # Login
+                            if username_input in users:
+                                if isinstance(users[username_input], str) and users[username_input] == hash_password(password_input):
+                                    current_user = username_input
+                                    game_state = "dashboard"
+                                elif isinstance(users[username_input], dict) and users[username_input]["password"] == hash_password(password_input):
+                                    current_user = username_input
+                                    game_state = "dashboard"
+                                else:
+                                    error_message = "Invalid username or password"
+                            else:
+                                error_message = "Invalid username or password"
+                # Check if signup button clicked
+                elif signup_button_x <= event.pos[0] <= signup_button_x + button_width and button_y <= event.pos[1] <= button_y + button_height:
+                    login_active = False
+                    if username_input and password_input:
+                        if not login_active:
+                            # Sign up
+                            if username_input in users:
+                                error_message = "Username already exists"
+                            else:
+                                users[username_input] = {
+                                    "password": hash_password(password_input),
+                                    "high_score": 0
+                                }
+                                save_users(users)
+                                current_user = username_input
+                                game_state = "dashboard"
+            
+            elif game_state == "dashboard":
+                # Check if play button clicked
+                if play_button_x <= event.pos[0] <= play_button_x + dashboard_button_width and dashboard_button_y <= event.pos[1] <= dashboard_button_y + dashboard_button_height:
+                    reset_game()
+                # Check if leaderboard button clicked
+                elif leaderboard_button_x <= event.pos[0] <= leaderboard_button_x + dashboard_button_width and dashboard_button_y <= event.pos[1] <= dashboard_button_y + dashboard_button_height:
+                    game_state = "leaderboard"
+                # Check if logout button clicked
+                elif (WINDOW_WIDTH - 120) // 2 <= event.pos[0] <= (WINDOW_WIDTH + 120) // 2 and WINDOW_HEIGHT - 100 <= event.pos[1] <= WINDOW_HEIGHT - 60:
+                    current_user = None
+                    game_state = "auth"
+                    username_input = ""
+                    password_input = ""
+                    input_active = "username"
+                    error_message = ""
+            
+            elif game_state == "leaderboard":
+                # Check if back button clicked
+                back_button_width = 120
+                back_button_x = (WINDOW_WIDTH - back_button_width) // 2
+                back_button_y = WINDOW_HEIGHT - 100
+                if back_button_x <= event.pos[0] <= back_button_x + back_button_width and back_button_y <= event.pos[1] <= back_button_y + back_button_height:
+                    game_state = "dashboard"
+            
+            elif game_state == "game_over":
+                # Check if dashboard button clicked
+                dashboard_button_width = 200
+                dashboard_button_x = (WINDOW_WIDTH - dashboard_button_width) // 2
+                dashboard_button_y = (WINDOW_HEIGHT - UI_HEIGHT) // 2 + 120
+                if dashboard_button_x <= event.pos[0] <= dashboard_button_x + dashboard_button_width and dashboard_button_y <= event.pos[1] <= dashboard_button_y + dashboard_button_height:
+                    update_high_score()
+                    game_state = "dashboard"
+                
+        elif event.type == pygame.KEYDOWN:
+            if game_state == "auth":
+                if event.key == pygame.K_TAB:
+                    input_active = "password" if input_active == "username" else "username"
+                elif event.key == pygame.K_RETURN:
+                    if username_input and password_input:
+                        if login_active:
+                            # Login
+                            if username_input in users:
+                                if isinstance(users[username_input], str) and users[username_input] == hash_password(password_input):
+                                    current_user = username_input
+                                    game_state = "dashboard"
+                                elif isinstance(users[username_input], dict) and users[username_input]["password"] == hash_password(password_input):
+                                    current_user = username_input
+                                    game_state = "dashboard"
+                                else:
+                                    error_message = "Invalid username or password"
+                            else:
+                                error_message = "Invalid username or password"
+                        else:
+                            # Sign up
+                            if username_input in users:
+                                error_message = "Username already exists"
+                            else:
+                                users[username_input] = {
+                                    "password": hash_password(password_input),
+                                    "high_score": 0
+                                }
+                                save_users(users)
+                                current_user = username_input
+                                game_state = "dashboard"
+                elif event.key == pygame.K_BACKSPACE:
+                    if input_active == "username":
+                        username_input = username_input[:-1]
+                    else:
+                        password_input = password_input[:-1]
+                else:
+                    if input_active == "username":
+                        if len(username_input) < 20:
+                            username_input += event.unicode
+                    else:
+                        if len(password_input) < 20:
+                            password_input += event.unicode
+            
+            elif game_state == "game_over" and event.key == pygame.K_r:
+                reset_game()
+    
+    # Fill the screen with black
+    screen.fill(BLACK)
+    
+    # Handle different game states
+    if game_state == "auth":
+        draw_auth_screen()
+    
+    elif game_state == "dashboard":
+        draw_dashboard()
+    
+    elif game_state == "leaderboard":
+        draw_leaderboard()
+    
+    elif game_state == "playing" or game_state == "game_over":
+        # Update flag positions
+        for flag in flags:
+            if not flag['captured']:
+                flag['x'] += flag['dx']
+                flag['y'] += flag['dy']
+                
+                # Bounce off edges
+                if flag['x'] < 20 or flag['x'] > WINDOW_WIDTH - 20:
+                    flag['dx'] *= -1
+                if flag['y'] < 60 or flag['y'] > WINDOW_HEIGHT - UI_HEIGHT - 20:
+                    flag['dy'] *= -1
+        
+        if game_state == "playing":
+            # Handle key presses for movement
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_LEFT]:
+                net_x -= net_speed
+            if keys[pygame.K_RIGHT]:
+                net_x += net_speed
+            if keys[pygame.K_UP]:
+                net_y -= net_speed
+            if keys[pygame.K_DOWN]:
+                net_y += net_speed
+            
+            # Keep the net within the play area
+            net_x = max(20, min(net_x, WINDOW_WIDTH - 20))
+            net_y = max(20, min(net_y, WINDOW_HEIGHT - UI_HEIGHT - 20))
+            
+            # Check for flag collisions
+            check_flag_collision()
+            
+            # Check if time is up
+            remaining_time = game_time - (time.time() - start_time)
+            if remaining_time <= 0:
+                game_state = "game_over"
+                update_high_score()
+        
+        # Draw the flags
+        for flag in flags:
+            if not flag['captured']:
+                draw_flag(flag['x'], flag['y'], flag['color'])
+        
+        # Draw the butterfly net
+        draw_net(net_x, net_y)
+        
+        # Draw UI
+        draw_game_ui()
+        
+        # Draw game over overlay if needed
+        if game_state == "game_over":
+            draw_game_over()
+    
+    # Update the display
+    pygame.display.flip()
+    
+    # Cap the frame rate
+    clock.tick(60)
+
+# Quit the game
+pygame.quit()
+sys.exit()
